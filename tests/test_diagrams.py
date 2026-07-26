@@ -66,6 +66,14 @@ def test_signs_of_the_three_energy_diagrams():
                  "1/2 g{i1,i2;a1,a2} t{a1;i1} t{a2;i2}"):
         assert draw.diagram_sign(json.loads(run(term))) == 1, term
 
+def test_antisymmetriser_is_a_projection_not_a_vertex():
+    d = json.loads(run("Â{i_1;a_1}:A-C-S * f{a_1;i_1}:A-C-S"))
+    assert [v["label"] for v in d["vertices"]] == ["f"]
+    assert d["targets"] == {"bra": ["i_1"], "ket": ["a_1"]}
+    assert all(l["external"] for l in d["lines"])   # target indices run free
+    # and rule 8's quasiloops close them, so the sign is still computable
+    assert draw.diagram_sign(d) == 1
+
 def test_sign_is_none_for_open_diagrams():
     d = json.loads(run("-1/2 g{i1,i2;a1,a2} t{a2,a3;i1,i2}"))
     assert draw.diagram_sign(d) is None   # quasiloops not handled

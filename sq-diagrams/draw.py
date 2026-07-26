@@ -76,8 +76,10 @@ def term_expression(diagram):
     # thin spaces, not concatenation: "\rangle" abutting "t" parses as "\ranglet"
     return "$" + r"\,".join(p for p in parts if p) + "$"
 
+_TARGET = -1   # virtual vertex standing for the projection onto the target manifold
+
 def count_loops(diagram):
-    """Number of loops, or None if the diagram is open.
+    """Number of loops (quasiloops included), or None if they cannot be closed.
 
     A terminal is one (vertex, slot, pos). Two perfect matchings live on them:
     the lines themselves, and the within-vertex pairing that joins slot position
@@ -85,11 +87,26 @@ def count_loops(diagram):
     The union of two perfect matchings is a disjoint set of alternating cycles,
     and those cycles are the loops.
     """
-    if any(l["external"] for l in diagram["lines"]):
-        return None  # rule 8's quasiloops for paired external lines: not handled
+    targets = diagram.get("targets") or {"bra": [], "ket": []}
+    external = [l for l in diagram["lines"] if l["external"]]
+    if external and not (targets["bra"] or targets["ket"]):
+        return None  # open, but nothing says how its free ends pair up
+
     line_end = {}
     for line in diagram["lines"]:
-        (a, b) = [(e["vertex"], e["slot"], e["pos"]) for e in line["endpoints"]]
+        ends = [(e["vertex"], e["slot"], e["pos"]) for e in line["endpoints"]]
+        if line["external"]:
+            # rule 8: paired external lines close through imaginary extensions
+            # into quasiloops. Slot k of the target bra pairs with slot k of the
+            # target ket, exactly as within a vertex, so treat the projection as
+            # one more vertex (id -1).
+            for slot in ("bra", "ket"):
+                if line["index"] in targets[slot]:
+                    ends.append((_TARGET, slot, targets[slot].index(line["index"])))
+                    break
+            else:
+                return None  # a free end that is not a target index
+        a, b = ends
         line_end[a], line_end[b] = b, a
     partner = lambda t: (t[0], "ket" if t[1] == "bra" else "bra", t[2])
 
@@ -145,12 +162,16 @@ def _glyph_span(diagram, vid, pts):
         return x0, x1 + _LABEL_ZONE
     return x0 - _BAR_OVERHANG, x1 + _BAR_OVERHANG + _LABEL_ZONE
 
+def _target_level(pts):
+    return max(p[1] for vp in pts.values() for p in vp) + _STUB
+
 def _endpoints_xy(diagram, line, pts):
     e = line["endpoints"]
     a = pts[e[0]["vertex"]][e[0]["pos"]]
     if line["external"]:
-        up = line_direction(line) == "up"
-        return a, (a[0], a[1] + (_STUB if up else -_STUB))
+        # external lines carry the target indices and run to the top of the
+        # diagram, whichever way their arrow points (cf. Fig. 10.2)
+        return a, (a[0], _target_level(pts))
     return a, pts[e[1]["vertex"]][e[1]["pos"]]
 
 def _crosses(p, q, r, s):
@@ -298,11 +319,7 @@ def _draw(ax, diagram, fontsize=13):
     for i, line in enumerate(diagram["lines"]):
         up = line_direction(line) == "up"
         eps = line["endpoints"]
-        a = pts[eps[0]["vertex"]][eps[0]["pos"]]
-        if line["external"]:
-            b = (a[0], a[1] + (_STUB if up else -_STUB))
-        else:
-            b = pts[eps[1]["vertex"]][eps[1]["pos"]]
+        a, b = _endpoints_xy(diagram, line, pts)
         # arrow points "up" for particle, "down" for hole
         lo, hi = (a, b) if a[1] <= b[1] else (b, a)
         src, dst = (lo, hi) if up else (hi, lo)

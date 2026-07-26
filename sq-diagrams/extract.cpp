@@ -81,12 +81,31 @@ static void emit_diagram(std::ostringstream& out, const ExprPtr& expr,
     factors.push_back(expr);
   }
 
+  // Â is the projection onto the target manifold, not a vertex. Keeping it out
+  // of the tensor network leaves its indices appearing once, so they fall out
+  // as external lines -- which is exactly what target indices are (rule 1).
+  std::vector<ExprPtr> network;
+  std::vector<std::string> target_bra, target_ket;
+  for (const auto& f : factors) {
+    const auto t = std::dynamic_pointer_cast<Tensor>(f);
+    if (t && t->label() == L"Â") {
+      target_bra = labels_of(t->bra());
+      target_ket = labels_of(t->ket());
+    } else {
+      network.push_back(f);
+    }
+  }
+
   out << "{\"term\":\"" << json_escape(term) << "\",";
   out << "\"prefactor\":\"" << json_escape(prefactor) << "\",";
+  // bra/ket kept apart: slot k of each pair up, which is how rule 8 closes
+  // external lines into quasiloops
+  out << "\"targets\":{\"bra\":" << json_str_array(target_bra)
+      << ",\"ket\":" << json_str_array(target_ket) << "},";
   out << "\"vertices\":[";
   std::vector<std::vector<std::string>> bras, kets;
-  for (size_t i = 0; i < factors.size(); ++i) {
-    const auto t = std::dynamic_pointer_cast<Tensor>(factors[i]);
+  for (size_t i = 0; i < network.size(); ++i) {
+    const auto t = std::dynamic_pointer_cast<Tensor>(network[i]);
     const std::wstring_view label = t->label();
     bras.push_back(labels_of(t->bra()));
     kets.push_back(labels_of(t->ket()));
@@ -111,7 +130,7 @@ static void emit_diagram(std::ostringstream& out, const ExprPtr& expr,
   };
 
   // lines from the tensor network edges
-  TensorNetworkV1 tn(factors);
+  TensorNetworkV1 tn(network);
   const auto isr = get_default_context().index_space_registry();
   out << "\"lines\":[";
   const auto& edges = tn.edges();
