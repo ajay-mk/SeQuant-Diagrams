@@ -37,6 +37,23 @@ def test_levels_put_H_above_amplitudes():
     y = {v["id"]: pos[v["id"]][1] for v in d["vertices"]}
     assert y[0] > y[1]   # eri (id 0) drawn above ampl (id 1)
 
+def test_dagger_amplitude():
+    # t-dagger is non-ASCII, so this also guards the UTF-8 round trip
+    d = json.loads(run("g{a1,a2;i1,i2} t⁺{i1,i2;a1,a2}"))
+    assert [v["kind"] for v in d["vertices"]] == ["eri", "deexc"]
+    assert d["vertices"][1]["label"] == "t⁺"
+
+def test_sum_emits_one_diagram_per_term():
+    d = json.loads(run("f{i1;a1} t{a1;i1} + 1/4 g{i1,i2;a1,a2} t{a1,a2;i1,i2}"))
+    assert isinstance(d, list) and len(d) == 2
+    assert {v["kind"] for t in d for v in t["vertices"]} == {"fock", "ampl", "eri"}
+
+def test_term_expression():
+    d = json.loads(run("1/4 g{i1,i2;a1,a2} t{a1,a2;i1,i2}"))
+    s = draw.term_expression(d)
+    assert r"\frac{1}{4}" in s and r"\langle" in s and "||" in s
+    assert r"\sum_{i_1\,i_2\,a_1\,a_2}" in s   # rule 5: internal labels only
+
 def test_levels_are_centred():
     # g over two t1 vertices: the lone interaction sits between them, not above
     # the leftmost one.

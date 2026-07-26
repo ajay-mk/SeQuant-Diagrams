@@ -1,7 +1,9 @@
 #include <SeQuant/core/context.hpp>
 #include <SeQuant/core/expr.hpp>
 #include <SeQuant/core/expressions/product.hpp>
+#include <SeQuant/core/expressions/sum.hpp>
 #include <SeQuant/core/expressions/tensor.hpp>
+#include <SeQuant/core/utility/string.hpp>
 #include <SeQuant/core/index.hpp>
 #include <SeQuant/core/index_space_registry.hpp>
 #include <SeQuant/core/io/shorthands.hpp>
@@ -17,9 +19,9 @@
 
 using namespace sequant;
 
-static std::string narrow(std::wstring_view w) {
-  return std::string(w.begin(), w.end());  // ASCII labels only
-}
+// SeQuant's own UTF-8 codec: labels like t⁺ are not ASCII, so a range copy
+// would mangle them in both directions.
+static std::string narrow(std::wstring_view w) { return toUtf8(w); }
 
 /// escape the two characters that would break a JSON string literal
 static std::string json_escape(const std::string& s) {
@@ -35,6 +37,7 @@ static std::string kind_of(std::wstring_view label) {
   if (label == L"f") return "fock";
   if (label == L"g") return "eri";
   if (label == L"t") return "ampl";
+  if (label == L"t⁺") return "deexc";  // t⁺, the de-excitation amplitude
   return "fock";  // ponytail: fall back to one-body glyph for unknown labels
 }
 
@@ -64,19 +67,8 @@ static std::vector<std::string> labels_of(const auto& indices) {
   return out;
 }
 
-int main(int argc, char** argv) {
-  if (argc < 2) {
-    std::cerr << "usage: sq-diagram-extract \"<DSL term>\"\n";
-    return 1;
-  }
-  set_default_context(
-      Context({.index_space_registry_shared_ptr = mbpt::make_min_sr_spaces(),
-               .vacuum = Vacuum::SingleProduct}));
-
-  const std::string narrow_in(argv[1]);
-  const std::wstring input(narrow_in.begin(), narrow_in.end());
-  ExprPtr expr = deserialize<ExprPtr>(input);
-
+static void emit_diagram(std::ostringstream& out, const ExprPtr& expr,
+                         const std::string& term) {
   // A bare single tensor deserializes to Tensor, not Product; normalize both to
   // (prefactor string, factor list).
   std::string prefactor = "1";
@@ -89,8 +81,7 @@ int main(int argc, char** argv) {
     factors.push_back(expr);
   }
 
-  std::ostringstream out;
-  out << "{\"term\":\"" << json_escape(narrow_in) << "\",";
+  out << "{\"term\":\"" << json_escape(term) << "\",";
   out << "\"prefactor\":\"" << json_escape(prefactor) << "\",";
   out << "\"vertices\":[";
   for (size_t i = 0; i < factors.size(); ++i) {
@@ -127,6 +118,35 @@ int main(int argc, char** argv) {
     first = false;
   }
   out << "]}";
+}
+
+int main(int argc, char** argv) {
+  if (argc < 2) {
+    std::cerr << "usage: sq-diagram-extract \"<DSL term or sum>\"\n";
+    return 1;
+  }
+  set_default_context(
+      Context({.index_space_registry_shared_ptr = mbpt::make_min_sr_spaces(),
+               .vacuum = Vacuum::SingleProduct}));
+
+  const std::string narrow_in(argv[1]);
+  ExprPtr expr = deserialize<ExprPtr>(toUtf16(narrow_in));
+
+  // A Sum becomes a JSON array, one diagram per summand; a single term stays a
+  // bare object so the one-term callers keep working.
+  std::ostringstream out;
+  if (expr->is<Sum>()) {
+    out << "[";
+    bool first = true;
+    for (const auto& summand : expr->as<Sum>().summands()) {
+      if (!first) out << ",";
+      emit_diagram(out, summand, narrow(serialize(summand)));
+      first = false;
+    }
+    out << "]";
+  } else {
+    emit_diagram(out, expr, narrow_in);
+  }
   std::cout << out.str() << std::endl;
   return 0;
 }

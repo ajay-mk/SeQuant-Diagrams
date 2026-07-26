@@ -6,7 +6,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-LEVEL = {"eri": 1, "fock": 1, "ampl": 0}
+# the interaction is the top vertex in a CC diagram (Shavitt & Bartlett p.295);
+# in UCC a de-excitation amplitude sits above it again.
+LEVEL = {"ampl": 0, "eri": 1, "fock": 1, "deexc": 2}
 
 _POINT_GAP = 0.7     # spacing between interaction points on one vertex
 _BAR_OVERHANG = 0.25  # how far a T-amplitude bar runs past its outermost point
@@ -30,6 +32,42 @@ def assign_positions(diagram):
 def line_direction(line):
     """Particle lines point up, hole lines point down (Goldstone convention)."""
     return "up" if line["type"] == "particle" else "down"
+
+def _indices(labels):
+    return r"\,".join(labels)
+
+def _vertex_tex(v):
+    """The factor a vertex contributes, per Fig. 10.1 rules 2-4."""
+    if v["kind"] == "eri":
+        return r"\langle %s||%s\rangle" % (_indices(v["bra"]), _indices(v["ket"]))
+    if v["kind"] == "fock":
+        return "f_{%s}" % _indices(v["bra"] + v["ket"])
+    sym = r"{t^{\dagger}}" if v["kind"] == "deexc" else "t"
+    return "%s^{%s}_{%s}" % (sym, _indices(v["bra"]), _indices(v["ket"]))
+
+def _prefactor_tex(diagram):
+    """SeQuant renders a Constant wrapped in three brace levels; unwrap it and
+    drop a bare 1, which carries no information."""
+    p = diagram.get("prefactor", "")
+    if p.startswith("{{{") and p.endswith("}}}"):
+        p = p[3:-3]
+    return "" if p in ("1", "") else p
+
+def term_expression(diagram):
+    """The algebraic term the diagram stands for, as a mathtext string.
+
+    Rule 5 sums over the internal line labels only; external lines carry the
+    target indices of an amplitude equation and are not summed.
+    """
+    internal = [l for l in diagram["lines"] if not l["external"]]
+    summed = ([l["index"] for l in internal if l["type"] == "hole"] +
+              [l["index"] for l in internal if l["type"] == "particle"])
+    parts = [_prefactor_tex(diagram)]
+    if summed:
+        parts.append(r"\sum_{%s}" % _indices(summed))
+    parts += [_vertex_tex(v) for v in diagram["vertices"]]
+    # thin spaces, not concatenation: "\rangle" abutting "t" parses as "\ranglet"
+    return "$" + r"\,".join(p for p in parts if p) + "$"
 
 def _slot_count(diagram, vid):
     v = diagram["vertices"][vid]
@@ -95,11 +133,10 @@ def _bows(diagram):
                 bows[i] = sign * _BOW
     return bows
 
-def render(diagram, out_path):
+def _draw(ax, diagram, fontsize=13):
     positions = assign_positions(diagram)
     pts = {v["id"]: _points(diagram, v["id"], positions)
            for v in diagram["vertices"]}
-    fig, ax = plt.subplots(figsize=(4, 4))
 
     right = max(_draw_vertex(ax, v, pts[v["id"]]) for v in diagram["vertices"])
 
@@ -128,12 +165,35 @@ def render(diagram, out_path):
     ax.set_xlim(min(xs) - _BAR_OVERHANG - 0.4, right + 0.4)
     ax.set_ylim(min(ys) - _STUB - 0.3, max(ys) + _STUB + 0.3)
 
-    ax.set_title(f"${diagram.get('prefactor', '')}$", fontsize=12)
+    # the interpretation goes under the diagram, as in Shavitt & Bartlett p.297
+    ax.text(0.5, -0.04, term_expression(diagram), transform=ax.transAxes,
+            ha="center", va="top", fontsize=fontsize)
     ax.set_aspect("equal"); ax.axis("off")
+
+def render(diagram, out_path):
+    fig, ax = plt.subplots(figsize=(4, 4))
+    _draw(ax, diagram)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+def render_grid(diagrams, out_path, ncols=4):
+    """One panel per term, for a whole Sum."""
+    nrows = -(-len(diagrams) // ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.4 * ncols, 3.6 * nrows),
+                             squeeze=False)
+    flat = [a for row in axes for a in row]
+    for ax, d in zip(flat, diagrams):
+        _draw(ax, d, fontsize=8)
+    for ax in flat[len(diagrams):]:
+        ax.axis("off")
     fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
 
 if __name__ == "__main__":
     src = sys.stdin if sys.argv[1] == "-" else open(sys.argv[1])
     with src as f:
-        render(json.load(f), sys.argv[2])
+        loaded = json.load(f)
+    if isinstance(loaded, list):
+        render_grid(loaded, sys.argv[2])
+    else:
+        render(loaded, sys.argv[2])
