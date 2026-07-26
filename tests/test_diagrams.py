@@ -40,3 +40,9 @@ def test_levels_put_H_above_amplitudes():
 def test_line_direction():
     assert draw.line_direction({"type": "particle"}) == "up"
     assert draw.line_direction({"type": "hole"}) == "down"
+
+def test_render_smoke(tmp_path):
+    d = json.loads(run("g{i1,i2;a1,a2} t{a2,a3;i1,i2}"))
+    out = tmp_path / "d.svg"
+    draw.render(d, str(out))
+    assert out.exists() and out.stat().st_size > 0
