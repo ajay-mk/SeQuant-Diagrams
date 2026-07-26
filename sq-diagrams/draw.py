@@ -72,6 +72,44 @@ def term_expression(diagram):
     # thin spaces, not concatenation: "\rangle" abutting "t" parses as "\ranglet"
     return "$" + r"\,".join(p for p in parts if p) + "$"
 
+def count_loops(diagram):
+    """Number of loops, or None if the diagram is open.
+
+    A terminal is one (vertex, slot, pos). Two perfect matchings live on them:
+    the lines themselves, and the within-vertex pairing that joins slot position
+    k of the bra to position k of the ket (Fig. 10.1 rule 3's left-out/left-in).
+    The union of two perfect matchings is a disjoint set of alternating cycles,
+    and those cycles are the loops.
+    """
+    if any(l["external"] for l in diagram["lines"]):
+        return None  # rule 8's quasiloops for paired external lines: not handled
+    line_end = {}
+    for line in diagram["lines"]:
+        (a, b) = [(e["vertex"], e["slot"], e["pos"]) for e in line["endpoints"]]
+        line_end[a], line_end[b] = b, a
+    partner = lambda t: (t[0], "ket" if t[1] == "bra" else "bra", t[2])
+
+    seen, loops = set(), 0
+    for start in line_end:
+        if start in seen:
+            continue
+        loops += 1
+        t = start
+        while t not in seen:
+            seen.add(t)
+            other = line_end[t]
+            seen.add(other)
+            t = partner(other)
+    return loops
+
+def diagram_sign(diagram):
+    """Fig. 10.1 rule 8: -1^(h-l) from hole lines and loops. None if open."""
+    loops = count_loops(diagram)
+    if loops is None:
+        return None
+    holes = sum(1 for l in diagram["lines"] if l["type"] == "hole")
+    return -1 if (holes - loops) % 2 else 1
+
 def _slot_count(diagram, vid):
     v = diagram["vertices"][vid]
     return max(len(v["bra"]), len(v["ket"]), 1)
@@ -205,6 +243,13 @@ def _draw(ax, diagram, fontsize=13):
     # the interpretation goes under the diagram, as in Shavitt & Bartlett p.297
     ax.text(0.5, -0.04, term_expression(diagram), transform=ax.transAxes,
             ha="center", va="top", fontsize=fontsize)
+    loops = count_loops(diagram)
+    if loops is not None:
+        holes = sum(1 for l in diagram["lines"] if l["type"] == "hole")
+        sign = "+" if diagram_sign(diagram) > 0 else "-"
+        ax.text(0.5, -0.17, f"$h={holes},\\ l={loops}\\ \\Rightarrow\\ {sign}$",
+                transform=ax.transAxes, ha="center", va="top",
+                fontsize=fontsize - 4, color="0.45")
     ax.set_aspect("equal"); ax.axis("off")
 
 def render(diagram, out_path):

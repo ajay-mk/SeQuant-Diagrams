@@ -84,15 +84,31 @@ static void emit_diagram(std::ostringstream& out, const ExprPtr& expr,
   out << "{\"term\":\"" << json_escape(term) << "\",";
   out << "\"prefactor\":\"" << json_escape(prefactor) << "\",";
   out << "\"vertices\":[";
+  std::vector<std::vector<std::string>> bras, kets;
   for (size_t i = 0; i < factors.size(); ++i) {
     const auto t = std::dynamic_pointer_cast<Tensor>(factors[i]);
     const std::wstring_view label = t->label();
+    bras.push_back(labels_of(t->bra()));
+    kets.push_back(labels_of(t->ket()));
     out << (i ? "," : "") << "{\"id\":" << i << ",\"kind\":\"" << kind_of(label)
         << "\"" << ",\"label\":\"" << narrow(label) << "\""
-        << ",\"bra\":" << json_str_array(labels_of(t->bra()))
-        << ",\"ket\":" << json_str_array(labels_of(t->ket())) << "}";
+        << ",\"bra\":" << json_str_array(bras.back())
+        << ",\"ket\":" << json_str_array(kets.back()) << "}";
   }
   out << "],";
+
+  // Terminal::slot_group_ord is identically 0 for symmetric/antisymmetric
+  // tensors (v1.hpp; v1.cpp:867 only increments it when nonsymmetric), so it
+  // cannot say *which* bra/ket slot a terminal occupies. Recover that from the
+  // index's position in the tensor's own slot list instead.
+  const auto slot_pos = [&](int tensor_ord, TensorIndexSlotType st,
+                            const std::string& label) -> std::size_t {
+    const auto& slots = (st == TensorIndexSlotType::Bra) ? bras[tensor_ord]
+                                                         : kets[tensor_ord];
+    for (std::size_t k = 0; k < slots.size(); ++k)
+      if (slots[k] == label) return k;
+    return 0;
+  };
 
   // lines from the tensor network edges
   TensorNetworkV1 tn(factors);
@@ -108,11 +124,13 @@ static void emit_diagram(std::ostringstream& out, const ExprPtr& expr,
         << ",\"type\":\"" << (hole ? "hole" : "particle") << "\""
         << ",\"external\":" << (external ? "true" : "false")
         << ",\"endpoints\":[";
+    const std::string idx_label = narrow(idx.label());
     for (std::size_t k = 0; k < e.size(); ++k) {
       const auto& term = e[k];
       out << (k ? "," : "") << "{\"vertex\":" << term.tensor_ord
           << ",\"slot\":\"" << slot_name(term.slot_type) << "\""
-          << ",\"pos\":" << term.slot_group_ord << "}";
+          << ",\"pos\":" << slot_pos(term.tensor_ord, term.slot_type, idx_label)
+          << "}";
     }
     out << "]}";
     first = false;

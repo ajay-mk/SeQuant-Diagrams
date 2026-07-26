@@ -48,6 +48,28 @@ def test_sum_emits_one_diagram_per_term():
     assert isinstance(d, list) and len(d) == 2
     assert {v["kind"] for t in d for v in t["vertices"]} == {"fock", "ampl", "eri"}
 
+def test_slot_position_survives_antisymmetry():
+    # Terminal::slot_group_ord is identically 0 for antisymmetric tensors, so
+    # position has to come from the index's place in the bra/ket list. Typing a
+    # term without :A-C-S gives NONsymmetric tensors, where the ordinal does
+    # increment -- which is why this needs the explicit annotation to bite.
+    d = json.loads(run("1/4 g{i_1,i_2;a_1,a_2}:A-C-S * t{a_1,a_2;i_1,i_2}:A-N-S"))
+    lines = {l["index"]: l for l in d["lines"]}
+    assert lines["i_1"]["endpoints"][0]["pos"] == 0
+    assert lines["i_2"]["endpoints"][0]["pos"] == 1
+    assert draw.count_loops(d) == 2       # collapses to 1 if pos is degenerate
+
+def test_signs_of_the_three_energy_diagrams():
+    # Shavitt & Bartlett eq. (10.21): all three CC energy terms carry +
+    for term in ("1/4 g{i1,i2;a1,a2} t{a1,a2;i1,i2}",
+                 "f{i1;a1} t{a1;i1}",
+                 "1/2 g{i1,i2;a1,a2} t{a1;i1} t{a2;i2}"):
+        assert draw.diagram_sign(json.loads(run(term))) == 1, term
+
+def test_sign_is_none_for_open_diagrams():
+    d = json.loads(run("-1/2 g{i1,i2;a1,a2} t{a2,a3;i1,i2}"))
+    assert draw.diagram_sign(d) is None   # quasiloops not handled
+
 def test_term_expression():
     d = json.loads(run("1/4 g{i1,i2;a1,a2} t{a1,a2;i1,i2}"))
     s = draw.term_expression(d)
