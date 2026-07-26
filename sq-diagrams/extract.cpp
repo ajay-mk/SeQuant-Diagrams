@@ -5,6 +5,8 @@
 #include <SeQuant/core/index.hpp>
 #include <SeQuant/core/index_space_registry.hpp>
 #include <SeQuant/core/io/shorthands.hpp>
+#include <SeQuant/core/tensor_network/slot.hpp>
+#include <SeQuant/core/tensor_network/v1.hpp>
 #include <SeQuant/domain/mbpt/convention.hpp>
 
 #include <iostream>
@@ -43,6 +45,17 @@ static std::string json_str_array(const std::vector<std::string>& xs) {
     os << (i ? "," : "") << "\"" << xs[i] << "\"";
   os << "]";
   return os.str();
+}
+
+static std::string slot_name(TensorIndexSlotType s) {
+  switch (s) {
+    case TensorIndexSlotType::Bra:
+      return "bra";
+    case TensorIndexSlotType::Ket:
+      return "ket";
+    default:
+      return "aux";
+  }
 }
 
 static std::vector<std::string> labels_of(const auto& indices) {
@@ -87,6 +100,31 @@ int main(int argc, char** argv) {
         << "\"" << ",\"label\":\"" << narrow(label) << "\""
         << ",\"bra\":" << json_str_array(labels_of(t->bra()))
         << ",\"ket\":" << json_str_array(labels_of(t->ket())) << "}";
+  }
+  out << "],";
+
+  // lines from the tensor network edges
+  TensorNetworkV1 tn(factors);
+  const auto isr = get_default_context().index_space_registry();
+  out << "\"lines\":[";
+  const auto& edges = tn.edges();
+  bool first = true;
+  for (const auto& e : edges) {
+    const Index& idx = e.idx();
+    const bool hole = isr->is_pure_occupied(idx.space());
+    const bool external = (e.size() == 1);
+    out << (first ? "" : ",") << "{\"index\":\"" << narrow(idx.label()) << "\""
+        << ",\"type\":\"" << (hole ? "hole" : "particle") << "\""
+        << ",\"external\":" << (external ? "true" : "false")
+        << ",\"endpoints\":[";
+    for (std::size_t k = 0; k < e.size(); ++k) {
+      const auto& term = e[k];
+      out << (k ? "," : "") << "{\"vertex\":" << term.tensor_ord
+          << ",\"slot\":\"" << slot_name(term.slot_type) << "\""
+          << ",\"pos\":" << term.slot_group_ord << "}";
+    }
+    out << "]}";
+    first = false;
   }
   out << "]}";
   std::cout << out.str() << std::endl;

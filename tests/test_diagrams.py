@@ -17,3 +17,14 @@ def test_vertices():
     assert v0["label"] == "g"
     assert v0["bra"] == ["i_1", "i_2"] and v0["ket"] == ["a_1", "a_2"]
     assert d["vertices"][1]["ket"] == ["i_1", "i_2"]
+
+def test_lines():
+    d = json.loads(run("g{i1,i2;a1,a2} t{a2,a3;i1,i2}"))
+    lines = {l["index"]: l for l in d["lines"]}
+    # i_1,i_2 shared (internal, hole); a_2 shared (internal, particle);
+    # a_1,a_3 appear once (external, particle).
+    assert lines["i_1"]["type"] == "hole" and lines["i_1"]["external"] is False
+    assert lines["a_2"]["type"] == "particle" and lines["a_2"]["external"] is False
+    assert lines["a_1"]["external"] is True and lines["a_1"]["type"] == "particle"
+    assert len(lines["i_1"]["endpoints"]) == 2
+    assert len(lines["a_1"]["endpoints"]) == 1
