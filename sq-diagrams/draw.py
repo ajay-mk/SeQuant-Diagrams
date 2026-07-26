@@ -8,12 +8,18 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+# STIX rather than the DejaVu default: this is destined for JCTC/JCP,
+# where the default mathtext reads as "a matplotlib figure"
+matplotlib.rcParams["mathtext.fontset"] = "stix"
+matplotlib.rcParams["font.family"] = "STIXGeneral"
+
 # the interaction is the top vertex in a CC diagram (Shavitt & Bartlett p.295);
 # in UCC a de-excitation amplitude sits above it again.
 LEVEL = {"ampl": 0, "eri": 1, "fock": 1, "deexc": 2}
 
 _POINT_GAP = 0.95    # spacing between interaction points on one vertex; wide
                      # enough that two adjacent loops' inner labels stay apart
+_LEVEL_GAP = 1.4     # vertical spacing between vertex levels
 _BAR_OVERHANG = 0.25  # how far a T-amplitude bar runs past its outermost point
 _FOCK_STUB = 0.55    # length of the one-particle vertex's dashed tail
 _STUB = 0.6          # length of an external line's free end
@@ -46,7 +52,9 @@ def assign_positions(diagram):
         # centre each level on x=0, else a lone vertex sits above the leftmost
         # of the level below instead of between them (g over two t1 vertices)
         for k, vid in enumerate(ids):
-            pos[vid] = (2.0 * k - (len(ids) - 1), float(level))
+            # levels sit further apart than one unit: a two-level diagram has to
+            # fit several diagonals and their labels in the gap
+            pos[vid] = (2.0 * k - (len(ids) - 1), _LEVEL_GAP * float(level))
     return pos
 
 def line_direction(line):
@@ -66,12 +74,15 @@ def _vertex_tex(v):
     return "%s^{%s}_{%s}" % (sym, _indices(v["bra"]), _indices(v["ket"]))
 
 def _prefactor_tex(diagram):
-    """SeQuant renders a Constant wrapped in three brace levels; unwrap it and
-    drop a bare 1, which carries no information."""
-    p = diagram.get("prefactor", "")
-    if p.startswith("{{{") and p.endswith("}}}"):
-        p = p[3:-3]
-    return "" if p in ("1", "") else p
+    """The extractor's rational ("1/4", "-1/2", "-1") as mathtext."""
+    p = diagram.get("prefactor", "").strip()
+    if p in ("", "1"):
+        return ""         # a bare 1 carries no information
+    if p == "-1":
+        return "-"        # a bare -1 is a sign, not a coefficient
+    sign, p = ("-", p[1:]) if p.startswith("-") else ("", p)
+    num, slash, den = p.partition("/")
+    return sign + (r"\frac{%s}{%s}" % (num, den) if slash else num)
 
 def term_expression(diagram):
     """The algebraic term the diagram stands for, as a mathtext string.
@@ -163,17 +174,24 @@ def _points(diagram, vid, positions):
     n = _slot_count(diagram, vid)
     return [_anchor(vid, k, n, positions) for k in range(n)]
 
+def _vertex_extent(diagram, vid, pts):
+    """(left, right, y) of the glyph actually drawn for this vertex."""
+    vpts = pts[vid]
+    y = vpts[0][1]
+    # layout may permute slots, so points are not sorted by x
+    x0, x1 = min(p[0] for p in vpts), max(p[0] for p in vpts)
+    kind = diagram["vertices"][vid]["kind"]
+    if kind == "fock":
+        return x0, x0 + _FOCK_STUB, y
+    if kind == "eri":
+        return x0, x1, y
+    return x0 - _BAR_OVERHANG, x1 + _BAR_OVERHANG, y
+
 def _glyph_span(diagram, vid, pts):
     """The x-interval a vertex occupies, label included -- a line struck through
     a vertex label is as bad as one struck through its bar."""
-    xs = [p[0] for p in pts[vid]]
-    x0, x1 = min(xs), max(xs)
-    kind = diagram["vertices"][vid]["kind"]
-    if kind == "fock":
-        return x0, x0 + _FOCK_STUB + _LABEL_ZONE
-    if kind == "eri":
-        return x0, x1 + _LABEL_ZONE
-    return x0 - _BAR_OVERHANG, x1 + _BAR_OVERHANG + _LABEL_ZONE
+    left, right, _ = _vertex_extent(diagram, vid, pts)
+    return left, right + _LABEL_ZONE
 
 def _target_level(pts):
     return max(p[1] for vp in pts.values() for p in vp) + _STUB
@@ -245,17 +263,28 @@ def curves_of(diagram, pts):
         out.append((src, dst, bows.get(i, 0.0) if up else -bows.get(i, 0.0)))
     return out
 
-def label_clashes(diagram, pts, curves):
+def placement(diagram, pts):
+    """curves, their sample points, vertex label seats, line label seats.
+
+    One path, so the diagnostic cannot end up measuring a placement that the
+    renderer does not actually draw.
+    """
+    curves = curves_of(diagram, pts)
+    curve_pts = [_bezier(s, d, r, k / 16)[0]
+                 for s, d, r in curves for k in range(17)]
+    vlabels = place_vertex_labels(diagram, pts, curve_pts)
+    seats = _place_labels(diagram, pts, curves,
+                          [(p[0], p[1]) for p in vlabels.values()])
+    return curves, curve_pts, vlabels, seats
+
+def label_clashes(diagram, pts, curves=None):
     """How many labels still sit on a line, a vertex or another label.
 
     Placement is greedy, so a crowded diagram can run out of clear seats; this
     counts what it had to settle for.
     """
-    curve_pts = [_bezier(s, d, r, k / 16)[0]
-                 for s, d, r in curves for k in range(17)]
-    vlabels = place_vertex_labels(diagram, pts, curve_pts)
+    curves, curve_pts, vlabels, seats = placement(diagram, pts)
     vpos = [(p[0], p[1]) for p in vlabels.values()]
-    seats = _place_labels(diagram, pts, curves, vpos)
 
     bad = 0
     for i, seat in enumerate(seats):
@@ -307,19 +336,6 @@ def layout_points(diagram):
                 best = (s, pts)
     return best[1]
 
-def _vertex_extent(diagram, vid, pts):
-    """(left, right, y) of the glyph actually drawn for this vertex."""
-    vpts = pts[vid]
-    y = vpts[0][1]
-    # layout may permute slots, so points are not sorted by x
-    x0, x1 = min(p[0] for p in vpts), max(p[0] for p in vpts)
-    kind = diagram["vertices"][vid]["kind"]
-    if kind == "fock":
-        return x0, x0 + _FOCK_STUB, y
-    if kind == "eri":
-        return x0, x1, y
-    return x0 - _BAR_OVERHANG, x1 + _BAR_OVERHANG, y
-
 def place_vertex_labels(diagram, pts, obstacles):
     """vertex id -> (x, y, horizontal alignment).
 
@@ -355,13 +371,16 @@ def _draw_vertex(ax, diagram, vid, pts, label_pos, fontsize=12):
     elif kind == "eri":
         # rule 3: two-particle vertex spans exactly between its two points
         ax.plot([x0, x1], [y, y], "--", color=_VERTEX_COLOR, lw=1.3)
-        ax.plot([x0, x1], [y, y], "o", color=_VERTEX_COLOR, ms=4)
+        ax.plot([x0, x1], [y, y], "o", color=_VERTEX_COLOR, ms=5)
     else:
         ax.plot([left, right], [y, y], "-", color=_VERTEX_COLOR, lw=2.6)
 
     lx, ly, ha = label_pos
-    ax.text(lx, ly, diagram["vertices"][vid]["label"], ha=ha, va="center",
-            fontsize=fontsize, style="italic")
+    # the extractor's label is SeQuant's `t⁺`; the adjoint symbol is a dagger,
+    # and the caption underneath already writes it that way
+    label = diagram["vertices"][vid]["label"]
+    label = r"$t^{\dagger}$" if label == "t⁺" else "$%s$" % label
+    ax.text(lx, ly, label, ha=ha, va="center", fontsize=fontsize, style="italic")
     return max(right, lx) + 0.2
 
 def _bows(diagram):
@@ -375,8 +394,13 @@ def _bows(diagram):
     groups = {}
     for i, line in enumerate(diagram["lines"]):
         if line["external"]:
-            continue
-        key = frozenset((e["vertex"], e["pos"]) for e in line["endpoints"])
+            # two target lines can leave one anchor -- they run from the same
+            # point to the same target level, so without a bow they draw as one
+            # overprinted segment with two opposed arrowheads
+            e = line["endpoints"][0]
+            key = ("target", e["vertex"], e["pos"])
+        else:
+            key = frozenset((e["vertex"], e["pos"]) for e in line["endpoints"])
         groups.setdefault(key, []).append(i)
     bows = {}
     for members in groups.values():
@@ -471,13 +495,11 @@ def _centre_x(pts):
     xs = [x for vp in pts.values() for x, _ in vp]
     return (min(xs) + max(xs)) / 2
 
-def _draw(ax, diagram, fontsize=13):
-    pts = layout_points(diagram)
+def _draw(ax, diagram, fontsize=13, pts=None, span=None):
+    if pts is None:
+        pts = layout_points(diagram)
 
-    curves = curves_of(diagram, pts)
-    curve_pts = [_bezier(s, d, r, k / 16)[0]
-                 for s, d, r in curves for k in range(17)]
-    vlabels = place_vertex_labels(diagram, pts, curve_pts)
+    curves, curve_pts, vlabels, seats = placement(diagram, pts)
     right = max(_draw_vertex(ax, diagram, v["id"], pts, vlabels[v["id"]],
                              fontsize + 1) for v in diagram["vertices"])
 
@@ -487,30 +509,60 @@ def _draw(ax, diagram, fontsize=13):
     # rule 1: every line carries its index. Vertex labels are already fixed, so
     # feed their real positions in -- a label placed to the left of its glyph
     # falls outside the span the line labels otherwise avoid.
-    seats = _place_labels(diagram, pts, curves,
-                          [(p[0], p[1]) for p in vlabels.values()])
     for line, (lx, ly) in zip(diagram["lines"], seats):
         ax.text(lx, ly, "$%s$" % line["index"], ha="center", va="center",
                 fontsize=fontsize - 1, color=_LINE_COLOR[line["type"]])
 
     # annotate() arrows don't feed the autoscaler, so external stubs and bows
     # would be clipped away; size the axes from the interaction points instead.
-    xs = [x for vp in pts.values() for x, _ in vp]
-    ys = [y for vp in pts.values() for _, y in vp]
-    ax.set_xlim(min(xs) - _BAR_OVERHANG - 0.4, right + 0.4)
-    ax.set_ylim(min(ys) - _STUB - 0.3, max(ys) + _STUB + 0.3)
+    lo, hi = extent(diagram, pts, right)
+    if span:
+        # one scale for the whole sheet: with set_aspect("equal") each panel
+        # would otherwise get its own data-to-inch ratio, so a data-unit
+        # clearance is not a constant physical distance and text-to-diagram
+        # ratio wanders from panel to panel
+        for k in (0, 1):
+            slack = (span[k] - (hi[k] - lo[k])) / 2
+            lo[k], hi[k] = lo[k] - slack, hi[k] + slack
+    ax.set_xlim(lo[0], hi[0])
+    ax.set_ylim(lo[1], hi[1])
 
-    # the interpretation goes under the diagram, as in Shavitt & Bartlett p.297
-    ax.text(0.5, -0.04, term_expression(diagram), transform=ax.transAxes,
-            ha="center", va="top", fontsize=fontsize)
+    # The interpretation goes under the diagram, as in Shavitt & Bartlett p.297,
+    # offset in points from the diagram's own bottom edge. Axes-fraction offsets
+    # collapse on a wide flat panel, whose box set_aspect shrinks vertically,
+    # and the two lines then overprint.
+    anchor = dict(xy=(0.5, lo[1]), xycoords=("axes fraction", "data"),
+                  textcoords="offset points", ha="center", va="top")
+    ax.annotate(term_expression(diagram), xytext=(0, -6), **anchor,
+                fontsize=fontsize)
     loops = count_loops(diagram)
     if loops is not None:
         holes = sum(1 for l in diagram["lines"] if l["type"] == "hole")
         sign = "+" if diagram_sign(diagram) > 0 else "-"
-        ax.text(0.5, -0.17, f"$h={holes},\\ l={loops}\\ \\Rightarrow\\ {sign}$",
-                transform=ax.transAxes, ha="center", va="top",
-                fontsize=fontsize - 4, color="0.45")
+        ax.annotate(f"$h={holes},\\ l={loops}\\ \\Rightarrow\\ {sign}$",
+                    xytext=(0, -6 - 2.4 * fontsize), **anchor,
+                    fontsize=fontsize - 3, color="0.35")
     ax.set_aspect("equal"); ax.axis("off")
+
+def tag_prefix(diagrams):
+    """E/S/D for energy, singles, doubles -- taken from the target rank, which
+    is what actually distinguishes the three sheets."""
+    n = len((diagrams[0].get("targets") or {"bra": []})["bra"])
+    return {0: "E", 1: "S", 2: "D"}.get(n, "T")
+
+def extent(diagram, pts, right=None):
+    """[xlo, ylo], [xhi, yhi] of everything drawn for one diagram."""
+    if right is None:
+        curve_pts = [_bezier(s, d, r, k / 8)[0]
+                     for s, d, r in curves_of(diagram, pts) for k in range(9)]
+        vlabels = place_vertex_labels(diagram, pts, curve_pts)
+        right = max(_vertex_extent(diagram, v["id"], pts)[1]
+                    for v in diagram["vertices"])
+        right = max([right] + [p[0] for p in vlabels.values()]) + 0.2
+    xs = [x for vp in pts.values() for x, _ in vp]
+    ys = [y for vp in pts.values() for _, y in vp]
+    return ([min(xs) - _BAR_OVERHANG - 0.4, min(ys) - _STUB - 0.3],
+            [right + 0.4, max(ys) + _STUB + 0.3])
 
 def _save(fig, out_path, dpi):
     """Write the requested file and a vector sibling beside it.
@@ -529,23 +581,34 @@ def render(diagram, out_path):
     _save(fig, out_path, dpi=300)
 
 def render_grid(diagrams, out_path, ncols=None):
-    """One panel per term, for a whole Sum."""
+    """One panel per term, for a whole Sum, all drawn to a common scale."""
+    layouts = [layout_points(d) for d in diagrams]
+    boxes = [extent(d, p) for d, p in zip(diagrams, layouts)]
+    span = [max(hi[k] - lo[k] for lo, hi in boxes) for k in (0, 1)]
+
     if ncols is None:
-        # amplitude diagrams carry external target lines and run much wider than
-        # closed energy ones, so give them fewer, roomier columns
-        ncols = 3 if max(len(d["lines"]) for d in diagrams) > 5 else 4
+        # decide from the shape the panels actually have, not from line count:
+        # the singles diagrams carry external lines but stay near square
+        ncols = 3 if span[0] / span[1] > 1.25 else 4
     nrows = -(-len(diagrams) // ncols)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.0 * ncols, 4.2 * nrows),
-                             squeeze=False)
+    panel_w = 4.0 * max(1.0, span[0] / span[1]) ** 0.5
+    fig, axes = plt.subplots(nrows, ncols, squeeze=False,
+                             figsize=(panel_w * ncols, 4.4 * nrows))
+    # captions hang below their axes in points, so the default row spacing lets
+    # them run into the next row's panel tag
+    fig.subplots_adjust(hspace=0.45, wspace=0.15)
     flat = [a for row in axes for a in row]
-    for ax, d in zip(flat, diagrams):
-        _draw(ax, d, fontsize=11)
+    for k, (ax, d) in enumerate(zip(flat, diagrams)):
+        _draw(ax, d, fontsize=11, pts=layouts[k], span=span)
+        # a handle for citing a term in prose, per PLOTS.md multi-panel labels
+        ax.text(0.0, 1.0, f"{tag_prefix(diagrams)}{k + 1}", transform=ax.transAxes,
+                ha="left", va="top", fontsize=9, color="0.4", fontweight="bold")
     for ax in flat[len(diagrams):]:
         ax.axis("off")
     _save(fig, out_path, dpi=140)
 
 if __name__ == "__main__":
-    src = sys.stdin if sys.argv[1] == "-" else open(sys.argv[1])
+    src = sys.stdin if sys.argv[1] == "-" else open(sys.argv[1], encoding="utf-8")
     with src as f:
         loaded = json.load(f)
     if isinstance(loaded, list):

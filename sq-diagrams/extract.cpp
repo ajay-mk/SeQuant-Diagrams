@@ -14,6 +14,7 @@
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -38,7 +39,11 @@ static std::string kind_of(std::wstring_view label) {
   if (label == L"g") return "eri";
   if (label == L"t") return "ampl";
   if (label == L"t⁺") return "deexc";  // t⁺, the de-excitation amplitude
-  return "fock";  // ponytail: fall back to one-body glyph for unknown labels
+  // Falling back to a one-body glyph drew a rank-2 operator as a Fock cross and
+  // interpreted it as f_{ijab} -- confidently wrong physics, silently. There is
+  // no sane default here: the caller has to say what the operator is.
+  throw std::runtime_error("unknown tensor label '" + narrow(label) +
+                           "'; known labels are f, g, t, t⁺, Â");
 }
 
 static std::string json_str_array(const std::vector<std::string>& xs) {
@@ -75,7 +80,10 @@ static void emit_diagram(std::ostringstream& out, const ExprPtr& expr,
   std::vector<ExprPtr> factors;
   if (expr->is<Product>()) {
     const auto& prod = expr->as<Product>();
-    prefactor = narrow(to_latex(Constant(prod.scalar())));
+    // the DSL form ("1/4", "-1/2"), not to_latex: the LaTeX output carries a
+    // brace nesting depth that the consumer would have to string-match, which
+    // is the same coupling to SeQuant internals that slot_group_ord was
+    prefactor = narrow(serialize(ex<Constant>(prod.scalar())));
     factors.assign(prod.factors().begin(), prod.factors().end());
   } else {
     factors.push_back(expr);
@@ -106,6 +114,10 @@ static void emit_diagram(std::ostringstream& out, const ExprPtr& expr,
   std::vector<std::vector<std::string>> bras, kets;
   for (size_t i = 0; i < network.size(); ++i) {
     const auto t = std::dynamic_pointer_cast<Tensor>(network[i]);
+    if (!t)
+      throw std::runtime_error("factor " + std::to_string(i) +
+                               " is not a tensor; only products of tensors "
+                               "become diagrams");
     const std::wstring_view label = t->label();
     bras.push_back(labels_of(t->bra()));
     kets.push_back(labels_of(t->ket()));
@@ -126,7 +138,11 @@ static void emit_diagram(std::ostringstream& out, const ExprPtr& expr,
                                                          : kets[tensor_ord];
     for (std::size_t k = 0; k < slots.size(); ++k)
       if (slots[k] == label) return k;
-    return 0;
+    // This function exists because slot_group_ord silently returned 0; it must
+    // not repeat the trick. A miss would collapse loops and flip signs unseen.
+    throw std::logic_error("index '" + label +
+                           "' is not among the slots of tensor " +
+                           std::to_string(tensor_ord));
   };
 
   // lines from the tensor network edges
@@ -138,6 +154,13 @@ static void emit_diagram(std::ostringstream& out, const ExprPtr& expr,
   for (const auto& e : edges) {
     const Index& idx = e.idx();
     const bool hole = isr->is_pure_occupied(idx.space());
+    // "hole else particle" would draw a general-space index as an upward
+    // particle line without saying so; a diagram has no glyph for one.
+    if (!hole && !isr->is_pure_unoccupied(idx.space()))
+      throw std::runtime_error(
+          "index '" + narrow(idx.label()) +
+          "' is neither pure-occupied nor pure-unoccupied; diagrams need a "
+          "hole/particle split");
     const bool external = (e.size() == 1);
     out << (first ? "" : ",") << "{\"index\":\"" << narrow(idx.label()) << "\""
         << ",\"type\":\"" << (hole ? "hole" : "particle") << "\""
@@ -167,23 +190,32 @@ int main(int argc, char** argv) {
                .vacuum = Vacuum::SingleProduct}));
 
   const std::string narrow_in(argv[1]);
-  ExprPtr expr = deserialize<ExprPtr>(toUtf16(narrow_in));
+  try {
+    ExprPtr expr = deserialize<ExprPtr>(toUtf16(narrow_in));
+    if (!expr) throw std::runtime_error("empty expression");
 
-  // A Sum becomes a JSON array, one diagram per summand; a single term stays a
-  // bare object so the one-term callers keep working.
-  std::ostringstream out;
-  if (expr->is<Sum>()) {
-    out << "[";
-    bool first = true;
-    for (const auto& summand : expr->as<Sum>().summands()) {
-      if (!first) out << ",";
-      emit_diagram(out, summand, narrow(serialize(summand)));
-      first = false;
+    // A Sum becomes a JSON array, one diagram per summand; a single term stays
+    // a bare object so the one-term callers keep working.
+    std::ostringstream out;
+    if (expr->is<Sum>()) {
+      out << "[";
+      bool first = true;
+      for (const auto& summand : expr->as<Sum>().summands()) {
+        if (!first) out << ",";
+        emit_diagram(out, summand, narrow(serialize(summand)));
+        first = false;
+      }
+      out << "]";
+    } else {
+      emit_diagram(out, expr, narrow_in);
     }
-    out << "]";
-  } else {
-    emit_diagram(out, expr, narrow_in);
+    std::cout << out.str() << std::endl;
+  } catch (const std::exception& e) {
+    // A DSL typo used to reach a null deref and take the process out with
+    // SIGSEGV, which says nothing about what was wrong with the input.
+    std::cerr << "sq-diagram-extract: " << e.what() << "\n  input: " << narrow_in
+              << "\n";
+    return 1;
   }
-  std::cout << out.str() << std::endl;
   return 0;
 }

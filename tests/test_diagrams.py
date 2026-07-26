@@ -1,4 +1,5 @@
 import json, os, subprocess, pathlib, sys
+import pytest
 ROOT = pathlib.Path(__file__).parent.parent
 BIN = os.environ.get("SQ_DIAGRAM_BIN", str(ROOT / "build" / "sq-diagram-extract"))
 sys.path.insert(0, str(ROOT / "sq-diagrams"))
@@ -58,6 +59,34 @@ def test_slot_position_survives_antisymmetry():
     assert lines["i_1"]["endpoints"][0]["pos"] == 0
     assert lines["i_2"]["endpoints"][0]["pos"] == 1
     assert draw.count_loops(d) == 2       # collapses to 1 if pos is degenerate
+
+def fails(term):
+    """stderr of a run that must exit non-zero."""
+    out = subprocess.run([BIN, term], capture_output=True, text=True)
+    assert out.returncode != 0, f"expected a refusal for {term!r}"
+    return out.stderr
+
+@pytest.mark.parametrize("term, expected", [
+    ("not a term", "not a tensor"),                  # used to SIGSEGV
+    ("2 x", "not a tensor"),                         # used to SIGSEGV
+    ("λ{i1,i2;a1,a2} t{a1,a2;i1,i2}", "unknown tensor label"),  # drew as Fock
+    ("f{p1;p2} t{a1;i1}", "neither pure-occupied"),  # drew as a particle line
+])
+def test_bad_input_is_refused_not_guessed(term, expected):
+    assert expected in fails(term)
+
+def test_negative_sign():
+    # the +1 cases alone would pass a stubbed `return 1`
+    d = json.loads(run("f{i1;i2} t{a1;i1} t⁺{i2;a1}"))
+    assert draw.count_loops(d) == 1
+    assert draw.diagram_sign(d) == -1
+
+def test_endpoints_name_their_vertex():
+    # pos alone does not pin which tensor an endpoint belongs to
+    d = json.loads(run("1/4 g{i_1,i_2;a_1,a_2}:A-C-S * t{a_1,a_2;i_1,i_2}:A-N-S"))
+    lines = {l["index"]: l for l in d["lines"]}
+    ends = {(e["vertex"], e["slot"], e["pos"]) for e in lines["i_1"]["endpoints"]}
+    assert ends == {(0, "bra", 0), (1, "ket", 0)}
 
 def test_signs_of_the_three_energy_diagrams():
     # Shavitt & Bartlett eq. (10.21): all three CC energy terms carry +
