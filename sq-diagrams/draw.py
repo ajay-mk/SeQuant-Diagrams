@@ -1,4 +1,5 @@
 """Render a Brandow diagram from the extractor's JSON."""
+import itertools
 import json
 import math
 import sys
@@ -18,6 +19,9 @@ _STUB = 0.6          # length of an external line's free end
 _BOW = 0.22          # arc curvature that opens a hole/particle pair into a loop
 _HEAD = 0.01         # half-length of the stub carrying the mid-line arrowhead
 _LABEL_OFF = 0.17    # perpendicular offset of a line's index label
+_CLEARANCE = 0.12    # how wide of a vertex glyph a passing line must stay
+_LABEL_ZONE = 0.38   # room reserved for a vertex's label past its glyph
+_X_SHIFTS = (-1.0, -0.5, 0.0, 0.5, 1.0)  # candidate horizontal vertex offsets
 
 def assign_positions(diagram):
     """Vertex id -> (x, y). Fixed levels; vertices spread evenly per level."""
@@ -129,9 +133,95 @@ def _points(diagram, vid, positions):
     n = _slot_count(diagram, vid)
     return [_anchor(vid, k, n, positions) for k in range(n)]
 
+def _glyph_span(diagram, vid, pts):
+    """The x-interval a vertex occupies, label included -- a line struck through
+    a vertex label is as bad as one struck through its bar."""
+    xs = [p[0] for p in pts[vid]]
+    x0, x1 = min(xs), max(xs)
+    kind = diagram["vertices"][vid]["kind"]
+    if kind == "fock":
+        return x0, x0 + _FOCK_STUB + _LABEL_ZONE
+    if kind == "eri":
+        return x0, x1 + _LABEL_ZONE
+    return x0 - _BAR_OVERHANG, x1 + _BAR_OVERHANG + _LABEL_ZONE
+
+def _endpoints_xy(diagram, line, pts):
+    e = line["endpoints"]
+    a = pts[e[0]["vertex"]][e[0]["pos"]]
+    if line["external"]:
+        up = line_direction(line) == "up"
+        return a, (a[0], a[1] + (_STUB if up else -_STUB))
+    return a, pts[e[1]["vertex"]][e[1]["pos"]]
+
+def _crosses(p, q, r, s):
+    """True if open segments pq and rs properly intersect."""
+    def side(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    d1, d2 = side(r, s, p), side(r, s, q)
+    d3, d4 = side(p, q, r), side(p, q, s)
+    return (d1 * d2 < 0) and (d3 * d4 < 0)
+
+def penalties(diagram, pts):
+    """(lines struck through a vertex, line-line crossings, total length)."""
+    segs = [_endpoints_xy(diagram, l, pts) for l in diagram["lines"]]
+
+    overlaps = 0
+    for line, (a, b) in zip(diagram["lines"], segs):
+        touched = {e["vertex"] for e in line["endpoints"]}
+        for v in diagram["vertices"]:
+            vid = v["id"]
+            if vid in touched:
+                continue
+            vy = pts[vid][0][1]
+            if (a[1] - vy) * (b[1] - vy) >= 0:
+                continue           # does not cross this vertex's level
+            t = (vy - a[1]) / (b[1] - a[1])
+            x = a[0] + t * (b[0] - a[0])
+            lo, hi = _glyph_span(diagram, vid, pts)
+            if lo - _CLEARANCE < x < hi + _CLEARANCE:
+                overlaps += 1
+
+    crossings = sum(_crosses(*segs[i], *segs[j])
+                    for i in range(len(segs)) for j in range(i + 1, len(segs)))
+    length = sum(math.dist(a, b) for a, b in segs)
+    return overlaps, crossings, length
+
+def _score(diagram, pts):
+    """Lower is better: glyph overlaps dominate, then crossings, then length."""
+    overlaps, crossings, length = penalties(diagram, pts)
+    return 100 * overlaps + 10 * crossings + length
+
+def layout_points(diagram):
+    """Attachment points per vertex, chosen to keep lines clear of the glyphs.
+
+    Diagrams here are small (a handful of vertices of rank <= 2), so an exact
+    search over slot orderings and vertex offsets is both cheaper to write and
+    better than a Sugiyama-style crossing heuristic.
+    """
+    base = assign_positions(diagram)
+    ids = [v["id"] for v in diagram["vertices"]]
+    counts = {i: _slot_count(diagram, i) for i in ids}
+    orderings = [list(itertools.permutations(range(counts[i]))) for i in ids]
+
+    best = None
+    for shifts in itertools.product(_X_SHIFTS, repeat=len(ids)):
+        for perms in itertools.product(*orderings):
+            pts = {}
+            for vid, shift, perm in zip(ids, shifts, perms):
+                cx, cy = base[vid]
+                n = counts[vid]
+                pts[vid] = [(cx + shift + (perm[k] - (n - 1) / 2) * _POINT_GAP, cy)
+                            for k in range(n)]
+            s = _score(diagram, pts)
+            if best is None or s < best[0]:
+                best = (s, pts)
+    return best[1]
+
 def _draw_vertex(ax, v, pts):
     """One vertex glyph, per Fig. 10.1: `>--x` for f, `>--<` for g, bar for T."""
-    (x0, y), (x1, _) = pts[0], pts[-1]
+    # layout may permute slots, so points are not sorted by x
+    y = pts[0][1]
+    x0, x1 = min(p[0] for p in pts), max(p[0] for p in pts)
     if v["kind"] == "fock":
         # rule 2: one-particle vertex is a dashed stub ending in a cross
         ax.plot([x0, x0 + _FOCK_STUB], [y, y], "--", color="black", lw=1.2)
@@ -198,9 +288,7 @@ def _draw_line(ax, src, dst, rad):
     return (mx, my), (ux, uy)
 
 def _draw(ax, diagram, fontsize=13):
-    positions = assign_positions(diagram)
-    pts = {v["id"]: _points(diagram, v["id"], positions)
-           for v in diagram["vertices"]}
+    pts = layout_points(diagram)
 
     right = max(_draw_vertex(ax, v, pts[v["id"]]) for v in diagram["vertices"])
 

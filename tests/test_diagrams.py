@@ -76,6 +76,13 @@ def test_term_expression():
     assert r"\frac{1}{4}" in s and r"\langle" in s and "||" in s
     assert r"\sum_{i_1\,i_2\,a_1\,a_2}" in s   # rule 5: internal labels only
 
+def test_layout_keeps_lines_off_the_glyphs():
+    # a_1 runs from t straight up to t-dagger, skipping the level f sits on, so
+    # a naive shared-centre layout draws it through the f vertex
+    d = json.loads(run("-1 f{i_1;i_2}:A-C-S * t{a_1;i_1}:A-N-S * t⁺{i_2;a_1}:A-N-S"))
+    overlaps, crossings, _ = draw.penalties(d, draw.layout_points(d))
+    assert (overlaps, crossings) == (0, 0)
+
 def test_levels_are_centred():
     # g over two t1 vertices: the lone interaction sits between them, not above
     # the leftmost one.
