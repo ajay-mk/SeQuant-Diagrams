@@ -23,6 +23,13 @@ _LABEL_OFF = 0.17    # perpendicular offset of a line's index label
 _CLEARANCE = 0.12    # how wide of a vertex glyph a passing line must stay
 _LABEL_ZONE = 0.38   # room reserved for a vertex's label past its glyph
 _LABEL_CLEAR = 0.24  # radius a line label wants clear of lines and other labels
+
+# Okabe-Ito blue/vermillion: the diagram hinges on telling hole from particle,
+# so the pair is chosen for colourblind safety. Colour is redundant here, never
+# load-bearing -- arrow direction still carries hole/particle on its own, so
+# these print correctly in greyscale.
+_LINE_COLOR = {"hole": "#D55E00", "particle": "#0072B2"}
+_VERTEX_COLOR = "#1a1a1a"
 # candidate vertex offsets, in half-point-gap steps so the search keeps the same
 # freedom relative to vertex width whenever _POINT_GAP changes
 # 11 is where this stops paying: 9 shifts leave 28 crossings over the UCCSD BCH2
@@ -343,14 +350,14 @@ def _draw_vertex(ax, diagram, vid, pts, label_pos, fontsize=12):
     kind = diagram["vertices"][vid]["kind"]
     if kind == "fock":
         # rule 2: one-particle vertex is a dashed stub ending in a cross
-        ax.plot([left, right], [y, y], "--", color="black", lw=1.2)
-        ax.plot([right], [y], marker="x", color="black", ms=7, mew=1.5)
+        ax.plot([left, right], [y, y], "--", color=_VERTEX_COLOR, lw=1.3)
+        ax.plot([right], [y], marker="x", color=_VERTEX_COLOR, ms=7, mew=1.6)
     elif kind == "eri":
         # rule 3: two-particle vertex spans exactly between its two points
-        ax.plot([x0, x1], [y, y], "--", color="black", lw=1.2)
-        ax.plot([x0, x1], [y, y], "o", color="black", ms=3.5)
+        ax.plot([x0, x1], [y, y], "--", color=_VERTEX_COLOR, lw=1.3)
+        ax.plot([x0, x1], [y, y], "o", color=_VERTEX_COLOR, ms=4)
     else:
-        ax.plot([left, right], [y, y], "-", color="black", lw=2.5)
+        ax.plot([left, right], [y, y], "-", color=_VERTEX_COLOR, lw=2.6)
 
     lx, ly, ha = label_pos
     ax.text(lx, ly, diagram["vertices"][vid]["label"], ha=ha, va="center",
@@ -392,16 +399,16 @@ def _bezier(src, dst, rad, t):
     norm = math.hypot(tx, ty) or 1.0
     return (px, py), (tx / norm, ty / norm)
 
-def _draw_line(ax, src, dst, rad):
+def _draw_line(ax, src, dst, rad, color="black"):
     """Draw one directed line with its arrowhead at the curve's midpoint."""
     ax.annotate("", xy=dst, xytext=src,
-                arrowprops=dict(arrowstyle="-", color="black", lw=1.2,
+                arrowprops=dict(arrowstyle="-", color=color, lw=1.4,
                                 shrinkA=0, shrinkB=0,
                                 connectionstyle=f"arc3,rad={rad}"))
     (mx, my), (ux, uy) = _bezier(src, dst, rad, 0.5)
     ax.annotate("", xy=(mx + _HEAD * ux, my + _HEAD * uy),
                 xytext=(mx - _HEAD * ux, my - _HEAD * uy),
-                arrowprops=dict(arrowstyle="-|>", color="black", lw=1.2,
+                arrowprops=dict(arrowstyle="-|>", color=color, lw=1.4,
                                 shrinkA=0, shrinkB=0, mutation_scale=14))
 
 def _place_labels(diagram, pts, curves, extra=()):
@@ -474,8 +481,8 @@ def _draw(ax, diagram, fontsize=13):
     right = max(_draw_vertex(ax, diagram, v["id"], pts, vlabels[v["id"]],
                              fontsize + 1) for v in diagram["vertices"])
 
-    for curve in curves:
-        _draw_line(ax, *curve)
+    for line, curve in zip(diagram["lines"], curves):
+        _draw_line(ax, *curve, color=_LINE_COLOR[line["type"]])
 
     # rule 1: every line carries its index. Vertex labels are already fixed, so
     # feed their real positions in -- a label placed to the left of its glyph
@@ -484,7 +491,7 @@ def _draw(ax, diagram, fontsize=13):
                           [(p[0], p[1]) for p in vlabels.values()])
     for line, (lx, ly) in zip(diagram["lines"], seats):
         ax.text(lx, ly, "$%s$" % line["index"], ha="center", va="center",
-                fontsize=fontsize - 1)
+                fontsize=fontsize - 1, color=_LINE_COLOR[line["type"]])
 
     # annotate() arrows don't feed the autoscaler, so external stubs and bows
     # would be clipped away; size the axes from the interaction points instead.
@@ -505,11 +512,21 @@ def _draw(ax, diagram, fontsize=13):
                 fontsize=fontsize - 4, color="0.45")
     ax.set_aspect("equal"); ax.axis("off")
 
+def _save(fig, out_path, dpi):
+    """Write the requested file and a vector sibling beside it.
+
+    The PDF is the one that goes in a manuscript; these are line drawings, so it
+    stays small even for a full contact sheet.
+    """
+    fig.savefig(out_path, bbox_inches="tight", dpi=dpi)
+    if out_path.lower().endswith(".png"):
+        fig.savefig(out_path[:-4] + ".pdf", bbox_inches="tight")
+    plt.close(fig)
+
 def render(diagram, out_path):
     fig, ax = plt.subplots(figsize=(4, 4))
     _draw(ax, diagram)
-    fig.savefig(out_path, bbox_inches="tight")
-    plt.close(fig)
+    _save(fig, out_path, dpi=300)
 
 def render_grid(diagrams, out_path, ncols=None):
     """One panel per term, for a whole Sum."""
@@ -525,8 +542,7 @@ def render_grid(diagrams, out_path, ncols=None):
         _draw(ax, d, fontsize=11)
     for ax in flat[len(diagrams):]:
         ax.axis("off")
-    fig.savefig(out_path, bbox_inches="tight", dpi=140)
-    plt.close(fig)
+    _save(fig, out_path, dpi=140)
 
 if __name__ == "__main__":
     src = sys.stdin if sys.argv[1] == "-" else open(sys.argv[1])
