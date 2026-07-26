@@ -6,7 +6,14 @@ def run(term):
     out = subprocess.run([BIN, term], capture_output=True, text=True, check=True)
     return out.stdout.strip()
 
-def test_parse_roundtrip():
-    # Task 1: binary echoes the re-serialized term; proves link+context+parse.
-    out = run("t{a1,a2;i1,i2}")
-    assert "t" in out and "a_1" in out and "i_1" in out
+def test_emits_json():
+    d = json.loads(run("t{a1,a2;i1,i2}"))
+    assert d["term"] == "t{a1,a2;i1,i2}" and "vertices" in d
+
+def test_vertices():
+    d = json.loads(run("g{i1,i2;a1,a2} t{a2,a3;i1,i2}"))
+    assert [v["kind"] for v in d["vertices"]] == ["eri", "ampl"]
+    v0 = d["vertices"][0]
+    assert v0["label"] == "g"
+    assert v0["bra"] == ["i_1", "i_2"] and v0["ket"] == ["a_1", "a_2"]
+    assert d["vertices"][1]["ket"] == ["i_1", "i_2"]

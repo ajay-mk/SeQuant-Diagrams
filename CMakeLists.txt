@@ -18,6 +18,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(sequant)
 
-add_executable(sq-diagram-extract src/extract.cpp)
+add_executable(sq-diagram-extract sq-diagrams/extract.cpp)
 target_link_libraries(sq-diagram-extract PRIVATE SeQuant::SeQuant)
 set_target_properties(sq-diagram-extract PROPERTIES CXX_SCAN_FOR_MODULES OFF)
