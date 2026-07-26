@@ -88,8 +88,11 @@ def test_layout_keeps_lines_off_the_glyphs():
     # a_1 runs from t straight up to t-dagger, skipping the level f sits on, so
     # a naive shared-centre layout draws it through the f vertex
     d = json.loads(run("-1 f{i_1;i_2}:A-C-S * t{a_1;i_1}:A-N-S * t⁺{i_2;a_1}:A-N-S"))
-    overlaps, crossings, _ = draw.penalties(d, draw.layout_points(d))
+    pts = draw.layout_points(d)
+    overlaps, crossings, _ = draw.penalties(d, pts)
     assert (overlaps, crossings) == (0, 0)
+    # and no label ends up sitting on a line, a vertex or another label
+    assert draw.label_clashes(d, pts, draw.curves_of(d, pts)) == 0
 
 def test_levels_are_centred():
     # g over two t1 vertices: the lone interaction sits between them, not above

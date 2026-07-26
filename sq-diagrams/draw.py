@@ -12,7 +12,8 @@ import matplotlib.pyplot as plt
 # in UCC a de-excitation amplitude sits above it again.
 LEVEL = {"ampl": 0, "eri": 1, "fock": 1, "deexc": 2}
 
-_POINT_GAP = 0.7     # spacing between interaction points on one vertex
+_POINT_GAP = 0.95    # spacing between interaction points on one vertex; wide
+                     # enough that two adjacent loops' inner labels stay apart
 _BAR_OVERHANG = 0.25  # how far a T-amplitude bar runs past its outermost point
 _FOCK_STUB = 0.55    # length of the one-particle vertex's dashed tail
 _STUB = 0.6          # length of an external line's free end
@@ -22,7 +23,11 @@ _LABEL_OFF = 0.17    # perpendicular offset of a line's index label
 _CLEARANCE = 0.12    # how wide of a vertex glyph a passing line must stay
 _LABEL_ZONE = 0.38   # room reserved for a vertex's label past its glyph
 _LABEL_CLEAR = 0.24  # radius a line label wants clear of lines and other labels
-_X_SHIFTS = (-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5)  # candidate vertex offsets
+# candidate vertex offsets, in half-point-gap steps so the search keeps the same
+# freedom relative to vertex width whenever _POINT_GAP changes
+# 11 is where this stops paying: 9 shifts leave 28 crossings over the UCCSD BCH2
+# file, 11 leave 26, and 13 also leave 26 for 3.5x the search time
+_X_SHIFTS = tuple(k * _POINT_GAP / 2 for k in range(-5, 6))
 
 def assign_positions(diagram):
     """Vertex id -> (x, y). Fixed levels; vertices spread evenly per level."""
@@ -220,6 +225,45 @@ def penalties(diagram, pts):
     length = sum(math.dist(a, b) for a, b in segs)
     return overlaps, crossings, length
 
+def curves_of(diagram, pts):
+    """(src, dst, rad) per line, oriented so the arrow runs src -> dst."""
+    bows = _bows(diagram)
+    out = []
+    for i, line in enumerate(diagram["lines"]):
+        up = line_direction(line) == "up"
+        a, b = _endpoints_xy(diagram, line, pts)
+        # arrow points "up" for particle, "down" for hole
+        lo, hi = (a, b) if a[1] <= b[1] else (b, a)
+        src, dst = (lo, hi) if up else (hi, lo)
+        out.append((src, dst, bows.get(i, 0.0) if up else -bows.get(i, 0.0)))
+    return out
+
+def label_clashes(diagram, pts, curves):
+    """How many labels still sit on a line, a vertex or another label.
+
+    Placement is greedy, so a crowded diagram can run out of clear seats; this
+    counts what it had to settle for.
+    """
+    curve_pts = [_bezier(s, d, r, k / 16)[0]
+                 for s, d, r in curves for k in range(17)]
+    vlabels = place_vertex_labels(diagram, pts, curve_pts)
+    vpos = [(p[0], p[1]) for p in vlabels.values()]
+    seats = _place_labels(diagram, pts, curves, vpos)
+
+    bad = 0
+    for i, seat in enumerate(seats):
+        own = [_bezier(*curves[i], k / 16)[0] for k in range(17)]
+        near_line = any(math.dist(seat, p) < _LABEL_CLEAR * 0.6
+                        for p in curve_pts if p not in own)
+        near_label = any(math.dist(seat, s) < _LABEL_CLEAR for j, s in enumerate(seats)
+                         if j != i) or any(math.dist(seat, v) < _LABEL_CLEAR
+                                           for v in vpos)
+        bad += bool(near_line or near_label)
+    for i, a in enumerate(vpos):
+        if any(math.dist(a, b) < _LABEL_CLEAR for b in vpos[i + 1:]):
+            bad += 1
+    return bad
+
 def _score(diagram, pts):
     """Lower is better: glyph overlaps dominate, then crossings, then length.
 
@@ -256,41 +300,61 @@ def layout_points(diagram):
                 best = (s, pts)
     return best[1]
 
-def _draw_vertex(ax, v, pts, obstacles, fontsize=12):
-    """One vertex glyph, per Fig. 10.1: `>--x` for f, `>--<` for g, bar for T.
+def _vertex_extent(diagram, vid, pts):
+    """(left, right, y) of the glyph actually drawn for this vertex."""
+    vpts = pts[vid]
+    y = vpts[0][1]
+    # layout may permute slots, so points are not sorted by x
+    x0, x1 = min(p[0] for p in vpts), max(p[0] for p in vpts)
+    kind = diagram["vertices"][vid]["kind"]
+    if kind == "fock":
+        return x0, x0 + _FOCK_STUB, y
+    if kind == "eri":
+        return x0, x1, y
+    return x0 - _BAR_OVERHANG, x1 + _BAR_OVERHANG, y
+
+def place_vertex_labels(diagram, pts, obstacles):
+    """vertex id -> (x, y, horizontal alignment).
 
     The label takes whichever side is clear of the lines. It cannot simply go
     right: an external line leaving the rightmost point rises straight through
     that spot, and such a line is exempt from the layout's overlap test because
     it attaches to this very vertex.
     """
-    # layout may permute slots, so points are not sorted by x
-    y = pts[0][1]
-    x0, x1 = min(p[0] for p in pts), max(p[0] for p in pts)
-    if v["kind"] == "fock":
+    gap, lift = 0.14, 0.13
+    placed = {}
+    for v in diagram["vertices"]:
+        left, right, y = _vertex_extent(diagram, v["id"], pts)
+        candidates = [(right + gap, y + lift, "left"), (right + gap, y - lift, "left"),
+                      (left - gap, y + lift, "right"), (left - gap, y - lift, "right"),
+                      (right + gap, y, "left"), (left - gap, y, "right")]
+        near = obstacles + [(p[0], p[1]) for p in placed.values()]
+        placed[v["id"]] = min(
+            candidates,
+            key=lambda c: sum(math.dist((c[0], c[1]), o) < _LABEL_CLEAR
+                              for o in near))
+    return placed
+
+def _draw_vertex(ax, diagram, vid, pts, label_pos, fontsize=12):
+    """One vertex glyph, per Fig. 10.1: `>--x` for f, `>--<` for g, bar for T."""
+    left, right, y = _vertex_extent(diagram, vid, pts)
+    vpts = pts[vid]
+    x0, x1 = min(p[0] for p in vpts), max(p[0] for p in vpts)
+    kind = diagram["vertices"][vid]["kind"]
+    if kind == "fock":
         # rule 2: one-particle vertex is a dashed stub ending in a cross
-        ax.plot([x0, x0 + _FOCK_STUB], [y, y], "--", color="black", lw=1.2)
-        ax.plot([x0 + _FOCK_STUB], [y], marker="x", color="black", ms=7, mew=1.5)
-        left, right = x0, x0 + _FOCK_STUB
-    elif v["kind"] == "eri":
+        ax.plot([left, right], [y, y], "--", color="black", lw=1.2)
+        ax.plot([right], [y], marker="x", color="black", ms=7, mew=1.5)
+    elif kind == "eri":
         # rule 3: two-particle vertex spans exactly between its two points
         ax.plot([x0, x1], [y, y], "--", color="black", lw=1.2)
         ax.plot([x0, x1], [y, y], "o", color="black", ms=3.5)
-        left, right = x0, x1
     else:
-        ax.plot([x0 - _BAR_OVERHANG, x1 + _BAR_OVERHANG], [y, y],
-                "-", color="black", lw=2.5)
-        left, right = x0 - _BAR_OVERHANG, x1 + _BAR_OVERHANG
+        ax.plot([left, right], [y, y], "-", color="black", lw=2.5)
 
-    gap, lift = 0.14, 0.13
-    candidates = [(right + gap, y + lift, "left"), (right + gap, y - lift, "left"),
-                  (left - gap, y + lift, "right"), (left - gap, y - lift, "right"),
-                  (right + gap, y, "left"), (left - gap, y, "right")]
-    lx, ly, ha = min(candidates,
-                     key=lambda c: sum(math.dist((c[0], c[1]), o) < _LABEL_CLEAR
-                                       for o in obstacles))
-    ax.text(lx, ly, v["label"], ha=ha, va="center", fontsize=fontsize,
-            style="italic")
+    lx, ly, ha = label_pos
+    ax.text(lx, ly, diagram["vertices"][vid]["label"], ha=ha, va="center",
+            fontsize=fontsize, style="italic")
     return max(right, lx) + 0.2
 
 def _bows(diagram):
@@ -340,9 +404,9 @@ def _draw_line(ax, src, dst, rad):
                 arrowprops=dict(arrowstyle="-|>", color="black", lw=1.2,
                                 shrinkA=0, shrinkB=0, mutation_scale=14))
 
-def _place_labels(diagram, pts, curves):
+def _place_labels(diagram, pts, curves, extra=()):
     """An (x, y) for each line's index label, kept off the lines, the vertex
-    bars and each other.
+    bars, the vertex labels and each other.
 
     Each label may slide along its own curve and sit at one of a few distances
     from it; the first candidate clear of everything already placed wins, so
@@ -358,9 +422,14 @@ def _place_labels(diagram, pts, curves):
         n = max(int((hi - lo) / (_LABEL_CLEAR / 2)), 2)
         bars += [(lo + (hi - lo) * k / n, y) for k in range(n + 1)]
 
-    placed = []
-    for i, (src, dst, rad) in enumerate(curves):
-        others = [p for j, s in enumerate(samples) if j != i for p in s] + bars
+    placed = [None] * len(curves)
+    # two passes: a label placed early cannot see the ones placed after it, so
+    # revisit each once the whole set is down
+    for i in list(range(len(curves))) * 2:
+        src, dst, rad = curves[i]
+        others = ([p for j, s in enumerate(samples) if j != i for p in s]
+                  + bars + list(extra)
+                  + [q for j, q in enumerate(placed) if q and j != i])
         # a bowed line is labelled outside its arc, where the loop is already
         # open; a straight one may take either side, which is what keeps two
         # neighbouring verticals from pushing their labels to the same spot
@@ -379,8 +448,6 @@ def _place_labels(diagram, pts, curves):
                     cand = (px + _LABEL_OFF * scale * nx,
                             py + _LABEL_OFF * scale * ny)
                     clashes = sum(math.dist(cand, o) < _LABEL_CLEAR for o in others)
-                    clashes += sum(math.dist(cand, q) < _LABEL_CLEAR * 1.4
-                                   for q in placed)
                     cost = (clashes, scale, rank, abs(t - 0.5))
                     if best_cost is None or cost < best_cost:
                         best, best_cost = cand, cost
@@ -390,7 +457,7 @@ def _place_labels(diagram, pts, curves):
                     break
             if best_cost[0] == 0:
                 break
-        placed.append(best)
+        placed[i] = best
     return placed
 
 def _centre_x(pts):
@@ -400,27 +467,22 @@ def _centre_x(pts):
 def _draw(ax, diagram, fontsize=13):
     pts = layout_points(diagram)
 
-    bows = _bows(diagram)
-    curves = []
-    for i, line in enumerate(diagram["lines"]):
-        up = line_direction(line) == "up"
-        a, b = _endpoints_xy(diagram, line, pts)
-        # arrow points "up" for particle, "down" for hole
-        lo, hi = (a, b) if a[1] <= b[1] else (b, a)
-        src, dst = (lo, hi) if up else (hi, lo)
-        rad = bows.get(i, 0.0) if up else -bows.get(i, 0.0)
-        curves.append((src, dst, rad))
-
+    curves = curves_of(diagram, pts)
     curve_pts = [_bezier(s, d, r, k / 16)[0]
                  for s, d, r in curves for k in range(17)]
-    right = max(_draw_vertex(ax, v, pts[v["id"]], curve_pts, fontsize + 1)
-                for v in diagram["vertices"])
+    vlabels = place_vertex_labels(diagram, pts, curve_pts)
+    right = max(_draw_vertex(ax, diagram, v["id"], pts, vlabels[v["id"]],
+                             fontsize + 1) for v in diagram["vertices"])
 
     for curve in curves:
         _draw_line(ax, *curve)
 
-    # rule 1: every line carries its index
-    for line, (lx, ly) in zip(diagram["lines"], _place_labels(diagram, pts, curves)):
+    # rule 1: every line carries its index. Vertex labels are already fixed, so
+    # feed their real positions in -- a label placed to the left of its glyph
+    # falls outside the span the line labels otherwise avoid.
+    seats = _place_labels(diagram, pts, curves,
+                          [(p[0], p[1]) for p in vlabels.values()])
+    for line, (lx, ly) in zip(diagram["lines"], seats):
         ax.text(lx, ly, "$%s$" % line["index"], ha="center", va="center",
                 fontsize=fontsize - 1)
 
