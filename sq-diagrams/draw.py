@@ -1,5 +1,6 @@
 """Render a Brandow diagram from the extractor's JSON."""
 import json
+import math
 import sys
 
 import matplotlib
@@ -15,6 +16,8 @@ _BAR_OVERHANG = 0.25  # how far a T-amplitude bar runs past its outermost point
 _FOCK_STUB = 0.55    # length of the one-particle vertex's dashed tail
 _STUB = 0.6          # length of an external line's free end
 _BOW = 0.22          # arc curvature that opens a hole/particle pair into a loop
+_HEAD = 0.01         # half-length of the stub carrying the mid-line arrowhead
+_LABEL_OFF = 0.17    # perpendicular offset of a line's index label
 
 def assign_positions(diagram):
     """Vertex id -> (x, y). Fixed levels; vertices spread evenly per level."""
@@ -133,6 +136,29 @@ def _bows(diagram):
                 bows[i] = sign * _BOW
     return bows
 
+def _draw_line(ax, src, dst, rad):
+    """Draw one directed line, arrowhead at its midpoint. Returns that midpoint
+    and the unit tangent there.
+
+    matplotlib's arc3 is a quadratic Bezier whose control point sits at the
+    chord midpoint displaced by rad*(dy, -dx), so the curve midpoint is
+    M + rad/2*(dy, -dx) and the tangent at t=0.5 is just the chord direction.
+    """
+    ax.annotate("", xy=dst, xytext=src,
+                arrowprops=dict(arrowstyle="-", color="black", lw=1.2,
+                                shrinkA=0, shrinkB=0,
+                                connectionstyle=f"arc3,rad={rad}"))
+    (x1, y1), (x2, y2) = src, dst
+    dx, dy = x2 - x1, y2 - y1
+    mx, my = (x1 + x2) / 2 + rad * dy / 2, (y1 + y2) / 2 - rad * dx / 2
+    norm = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / norm, dy / norm
+    ax.annotate("", xy=(mx + _HEAD * ux, my + _HEAD * uy),
+                xytext=(mx - _HEAD * ux, my - _HEAD * uy),
+                arrowprops=dict(arrowstyle="-|>", color="black", lw=1.2,
+                                shrinkA=0, shrinkB=0, mutation_scale=14))
+    return (mx, my), (ux, uy)
+
 def _draw(ax, diagram, fontsize=13):
     positions = assign_positions(diagram)
     pts = {v["id"]: _points(diagram, v["id"], positions)
@@ -140,6 +166,8 @@ def _draw(ax, diagram, fontsize=13):
 
     right = max(_draw_vertex(ax, v, pts[v["id"]]) for v in diagram["vertices"])
 
+    all_x = [x for vp in pts.values() for x, _ in vp]
+    centre = (min(all_x) + max(all_x)) / 2
     bows = _bows(diagram)
     for i, line in enumerate(diagram["lines"]):
         up = line_direction(line) == "up"
@@ -153,10 +181,19 @@ def _draw(ax, diagram, fontsize=13):
         lo, hi = (a, b) if a[1] <= b[1] else (b, a)
         src, dst = (lo, hi) if up else (hi, lo)
         rad = bows.get(i, 0.0) if up else -bows.get(i, 0.0)
-        ax.annotate("", xy=dst, xytext=src,
-                    arrowprops=dict(arrowstyle="-|>", color="black", lw=1.2,
-                                    shrinkA=0, shrinkB=0,
-                                    connectionstyle=f"arc3,rad={rad}"))
+        (mx, my), (ux, uy) = _draw_line(ax, src, dst, rad)
+        # rule 1: label the line just outside its own arc. arc3 bulges toward
+        # rad*(dy, -dx), so that direction is always the outside of a loop; a
+        # straight line has no bulge, so push it away from the diagram's axis.
+        if rad:
+            px, py = math.copysign(1, rad) * uy, -math.copysign(1, rad) * ux
+        else:
+            px, py = -uy, ux
+            if (mx - centre) * px < 0:
+                px, py = -px, -py
+        ax.text(mx + _LABEL_OFF * px, my + _LABEL_OFF * py,
+                "$%s$" % line["index"], ha="center", va="center",
+                fontsize=fontsize - 3)
 
     # annotate() arrows don't feed the autoscaler, so external stubs and bows
     # would be clipped away; size the axes from the interaction points instead.
