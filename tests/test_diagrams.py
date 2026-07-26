@@ -37,6 +37,15 @@ def test_levels_put_H_above_amplitudes():
     y = {v["id"]: pos[v["id"]][1] for v in d["vertices"]}
     assert y[0] > y[1]   # eri (id 0) drawn above ampl (id 1)
 
+def test_levels_are_centred():
+    # g over two t1 vertices: the lone interaction sits between them, not above
+    # the leftmost one.
+    d = {"vertices": [{"id": 0, "kind": "eri"},
+                      {"id": 1, "kind": "ampl"}, {"id": 2, "kind": "ampl"}]}
+    pos = draw.assign_positions(d)
+    assert pos[0][0] == 0.0
+    assert pos[1][0] == -1.0 and pos[2][0] == 1.0
+
 def test_line_direction():
     assert draw.line_direction({"type": "particle"}) == "up"
     assert draw.line_direction({"type": "hole"}) == "down"

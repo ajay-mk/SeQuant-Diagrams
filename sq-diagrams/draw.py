@@ -19,8 +19,10 @@ def assign_positions(diagram):
     for v in diagram["vertices"]:
         by_level.setdefault(LEVEL[v["kind"]], []).append(v["id"])
     for level, ids in by_level.items():
+        # centre each level on x=0, else a lone vertex sits above the leftmost
+        # of the level below instead of between them (g over two t1 vertices)
         for k, vid in enumerate(ids):
-            pos[vid] = (2.0 * k, float(level))
+            pos[vid] = (2.0 * k - (len(ids) - 1), float(level))
     return pos
 
 def line_direction(line):
