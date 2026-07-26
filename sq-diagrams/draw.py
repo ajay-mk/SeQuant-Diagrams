@@ -57,7 +57,10 @@ def render(diagram, out_path):
         lw = 1.5 if v["kind"] in ("eri", "fock") else 3.0
         ax.plot([cx - _VERTEX_HALFWIDTH, cx + _VERTEX_HALFWIDTH], [cy, cy],
                 style, color="black", lw=lw)
-        ax.text(cx, cy + 0.12, v["label"], ha="center", fontsize=12)
+        # label past the right end of the bar: anchors never reach beyond
+        # cx + _VERTEX_HALFWIDTH/2, so nothing is drawn out here to collide with
+        ax.text(cx + _VERTEX_HALFWIDTH + 0.1, cy, v["label"],
+                ha="left", va="center", fontsize=12, style="italic")
 
     # lines
     for line in diagram["lines"]:
