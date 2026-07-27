@@ -139,6 +139,11 @@ territory and the layout has no crossing minimization, so busy terms can come
 out tangled. Disconnected terms and spin-traced (closed-shell) expressions are
 not handled.
 
+## LLM usage
+
+This project was implemented with the help of [Claude
+Code](https://claude.com/claude-code), using Anthropic's Opus 5 model.
+
 ## References
 
 * B. H. Brandow, *Linked-Cluster Expansions for the Nuclear Many-Body Problem*,
