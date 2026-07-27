@@ -11,7 +11,7 @@ find_package(Eigen3 CONFIG QUIET)
 FetchContent_Declare(
   sequant
   GIT_REPOSITORY https://github.com/ValeevGroup/SeQuant.git
-  GIT_TAG master  # ponytail: pin a SHA once green, for reproducibility
+  GIT_TAG 1e033dfc3bf21aaa30eaef9afb02ab382f6d6a07
   FIND_PACKAGE_ARGS CONFIG
 )
 FetchContent_MakeAvailable(sequant)

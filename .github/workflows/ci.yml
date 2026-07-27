@@ -1,0 +1,43 @@
+name: CI
+
+on: [push, pull_request]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libboost-dev libboost-locale-dev \
+            libboost-random-dev libboost-regex-dev libeigen3-dev
+
+      # Building SeQuant is the whole cost of this job. The key covers the SHA
+      # it is pinned to, since that lives in CMakeLists.txt, so the cache only
+      # goes cold when the pin moves.
+      - name: Cache the build tree
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Test
+        run: |
+          pip install -r requirements.txt
+          python -m pytest tests/ -v
