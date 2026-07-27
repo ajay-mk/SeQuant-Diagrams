@@ -1,8 +1,8 @@
 import json, os, subprocess, pathlib, sys
 import pytest
 ROOT = pathlib.Path(__file__).parent.parent
-BIN = os.environ.get("SQ_DIAGRAM_BIN", str(ROOT / "build" / "sq-diagram-extract"))
-sys.path.insert(0, str(ROOT / "sq-diagrams"))
+BIN = os.environ.get("SQ_DIAGRAM_BIN", str(ROOT / "build" / "sq-diagram-topology"))
+sys.path.insert(0, str(ROOT / "src"))
 import draw
 
 def run(term):

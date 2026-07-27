@@ -1,7 +1,11 @@
-"""Render a Brandow diagram from the extractor's JSON."""
+"""Render a Brandow diagram for a SeQuant term."""
 import itertools
 import json
 import math
+import os
+import pathlib
+import shutil
+import subprocess
 import sys
 
 import matplotlib
@@ -565,14 +569,15 @@ def extent(diagram, pts, right=None):
             [right + 0.4, max(ys) + _STUB + 0.3])
 
 def _save(fig, out_path, dpi):
-    """Write the requested file and a vector sibling beside it.
+    """Write one file, format from its suffix; no suffix means PDF.
 
-    The PDF is the one that goes in a manuscript; these are line drawings, so it
-    stays small even for a full contact sheet.
+    PDF is the default because that is what goes in a manuscript; these are line
+    drawings, so it stays small even for a full contact sheet. matplotlib
+    rejects a suffix it cannot write, which is the error we want.
     """
+    if not pathlib.Path(out_path).suffix:
+        out_path += ".pdf"
     fig.savefig(out_path, bbox_inches="tight", dpi=dpi)
-    if out_path.lower().endswith(".png"):
-        fig.savefig(out_path[:-4] + ".pdf", bbox_inches="tight")
     plt.close(fig)
 
 def render(diagram, out_path):
@@ -607,10 +612,31 @@ def render_grid(diagrams, out_path, ncols=None):
         ax.axis("off")
     _save(fig, out_path, dpi=140)
 
+def read_input(src):
+    """A SeQuant term, a topology JSON file, or '-' for that JSON on stdin.
+
+    Passing the term is the usual path: we run sq-diagram-topology ourselves so
+    the two-step pipeline stays an implementation detail.
+    """
+    if src == "-":
+        return json.load(sys.stdin)
+    if os.path.exists(src):
+        with open(src, encoding="utf-8") as f:
+            return json.load(f)
+    exe = os.environ.get("SQ_DIAGRAM_BIN") or shutil.which("sq-diagram-topology") \
+        or str(pathlib.Path(__file__).parent.parent / "build" / "sq-diagram-topology")
+    if not os.path.exists(exe):
+        sys.exit(f"{exe}: not built. Run `cmake --build build`, or set SQ_DIAGRAM_BIN.")
+    done = subprocess.run([exe, src], capture_output=True, text=True)
+    if done.returncode:
+        sys.exit(done.stderr.strip())
+    return json.loads(done.stdout)
+
 if __name__ == "__main__":
-    src = sys.stdin if sys.argv[1] == "-" else open(sys.argv[1], encoding="utf-8")
-    with src as f:
-        loaded = json.load(f)
+    if len(sys.argv) != 3:
+        sys.exit('usage: draw.py "<SeQuant term or sum>" <out[.pdf|.png|.svg]>\n'
+                 "       draw.py <topology.json|-> <out[.pdf|.png|.svg]>")
+    loaded = read_input(sys.argv[1])
     if isinstance(loaded, list):
         render_grid(loaded, sys.argv[2])
     else:

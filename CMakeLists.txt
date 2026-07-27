@@ -1,14 +1,12 @@
-cmake_minimum_required(VERSION 3.24)   # FIND_PACKAGE_ARGS needs >=3.24
-project(sq-diagrams CXX)
+cmake_minimum_required(VERSION 3.24)
+project(SeQuant-Diagrams CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Shareable build: find_package(SeQuant) first (short-circuits to a local build
-# when -DCMAKE_PREFIX_PATH=<SeQuant build dir> is passed), else clone+build once.
 include(FetchContent)
-# SeQuant's build-tree export names Eigen3::Eigen in its link interface but does
-# not find_package it; harmless no-op when SeQuant is fetched+built instead.
+
+# SeQuant needs Eigen
 find_package(Eigen3 CONFIG QUIET)
 FetchContent_Declare(
   sequant
@@ -18,6 +16,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(sequant)
 
-add_executable(sq-diagram-extract sq-diagrams/extract.cpp)
-target_link_libraries(sq-diagram-extract PRIVATE SeQuant::SeQuant)
-set_target_properties(sq-diagram-extract PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+add_executable(sq-diagram-topology src/topology.cpp)
+target_link_libraries(sq-diagram-topology PRIVATE SeQuant::core SeQuant::mbpt)
+set_target_properties(sq-diagram-topology PROPERTIES CXX_SCAN_FOR_MODULES OFF)

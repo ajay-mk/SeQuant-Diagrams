@@ -182,7 +182,7 @@ static void emit_diagram(std::ostringstream& out, const ExprPtr& expr,
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    std::cerr << "usage: sq-diagram-extract \"<DSL term or sum>\"\n";
+    std::cerr << "usage: sq-diagram-topology \"<DSL term or sum>\"\n";
     return 1;
   }
   set_default_context(
@@ -213,7 +213,7 @@ int main(int argc, char** argv) {
   } catch (const std::exception& e) {
     // A DSL typo used to reach a null deref and take the process out with
     // SIGSEGV, which says nothing about what was wrong with the input.
-    std::cerr << "sq-diagram-extract: " << e.what() << "\n  input: " << narrow_in
+    std::cerr << "sq-diagram-topology: " << e.what() << "\n  input: " << narrow_in
               << "\n";
     return 1;
   }
